@@ -1,97 +1,88 @@
-import TelegramBot from "node-telegram-bot-api";
-import { MongoClient } from "mongodb";
+import TelegramBot from 'node-telegram-bot-api';
+import mongoose from 'mongoose';
 
-// =================== CONFIG ===================
-const BOT_TOKEN = process.env.BOT_TOKEN; // Put in Render ENV
-const MONGODB_URI = process.env.MONGODB_URI; // Put in Render ENV
+// ==== CONFIG ====
+const BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN';
 const ADMIN_ID = 1697591760; // Your Telegram numeric ID
+const MONGO_URI = 'mongodb+srv://db_Xpreloads:db_Narbu26042002@cluster0.1nmv5td.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0';
 
-// =================== INIT BOT ===================
+// ==== DATABASE SETUP ====
+mongoose.connect(MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+
+const scamSchema = new mongoose.Schema({
+  number: String,
+  proof: String,
+});
+
+const Scam = mongoose.model('Scam', scamSchema);
+
+// ==== BOT SETUP ====
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
-let scammersCollection;
 
-// =================== MONGODB CONNECT ===================
-async function connectDB() {
-    try {
-        const client = new MongoClient(MONGODB_URI);
-        await client.connect();
-        const db = client.db("scamCheckerDB");
-        scammersCollection = db.collection("scammers");
-        console.log("✅ Connected to MongoDB");
-    } catch (err) {
-        console.error("❌ MongoDB connection failed:", err);
-    }
-}
-connectDB();
-
-// =================== COMMANDS ===================
-
-// START
+// ==== START COMMAND ====
 bot.onText(/\/start/, (msg) => {
-    bot.sendMessage(
-        msg.chat.id,
-        `👋 Welcome to Scam Checker Bot!\n\n` +
-        `You can:\n` +
-        `• /check <number> → Check if number is in scammer list\n` +
-        `• /addscammer <number> (Admin only)\n` +
-        `• /addproof <number> <proof details> (Admin only)\n\n` +
-        `Your Telegram ID: ${msg.from.id}`
-    );
+  bot.sendMessage(
+    msg.chat.id,
+    `👋 Welcome to the Scam Checker Bot!
+Send /check <number_with_country_code> to verify if a number is a scammer.
+📌 Example: /check +919876543210`
+  );
 });
 
-// ADD SCAMMER (Admin only)
-bot.onText(/\/addscammer (.+)/, async (msg, match) => {
-    if (msg.from.id !== ADMIN_ID) {
-        return bot.sendMessage(msg.chat.id, "❌ You are not authorized to use this command.");
-    }
-
-    const scamNumber = match[1].trim();
-    if (!scamNumber) return bot.sendMessage(msg.chat.id, "⚠️ Please provide a scammer number.");
-
-    await scammersCollection.updateOne(
-        { number: scamNumber },
-        { $set: { number: scamNumber } },
-        { upsert: true }
-    );
-
-    bot.sendMessage(msg.chat.id, `✅ Scammer number ${scamNumber} added successfully.`);
-});
-
-// ADD PROOF (Admin only)
-bot.onText(/\/addproof (.+)/, async (msg, match) => {
-    if (msg.from.id !== ADMIN_ID) {
-        return bot.sendMessage(msg.chat.id, "❌ You are not authorized to use this command.");
-    }
-
-    const args = match[1].split(" ");
-    const scamNumber = args.shift();
-    const proofDetails = args.join(" ");
-
-    if (!scamNumber || !proofDetails) {
-        return bot.sendMessage(msg.chat.id, "⚠️ Usage: /addproof <number> <proof details>");
-    }
-
-    await scammersCollection.updateOne(
-        { number: scamNumber },
-        { $set: { proof: proofDetails } },
-        { upsert: true }
-    );
-
-    bot.sendMessage(msg.chat.id, `📂 Proof added for ${scamNumber}.`);
-});
-
-// CHECK SCAMMER
+// ==== CHECK SCAMMER ====
 bot.onText(/\/check (.+)/, async (msg, match) => {
-    const scamNumber = match[1].trim();
-    if (!scamNumber) return bot.sendMessage(msg.chat.id, "⚠️ Please provide a number to check.");
+  const number = match[1];
+  const scammer = await Scam.findOne({ number });
 
-    const scammer = await scammersCollection.findOne({ number: scamNumber });
-    if (scammer) {
-        bot.sendMessage(
-            msg.chat.id,
-            `🚨 This number is in the scammer list!\n\nNumber: ${scammer.number}\nProof: ${scammer.proof || "No proof added"}`
-        );
-    } else {
-        bot.sendMessage(msg.chat.id, "✅ This number is not in the scammer list.");
-    }
+  if (scammer) {
+    bot.sendMessage(
+      msg.chat.id,
+      `🚨 *SCAMMER FOUND!* 🚨\n📞 Number: ${scammer.number}`,
+      { parse_mode: 'Markdown' }
+    );
+    bot.sendMessage(msg.chat.id, `📂 Proof: ${scammer.proof}`);
+  } else {
+    bot.sendMessage(msg.chat.id, `✅ No scam reports found for ${number}.`);
+  }
+});
+
+// ==== ADD SCAMMER (ADMIN ONLY) ====
+bot.onText(/\/addscammer (.+)/, async (msg, match) => {
+  if (msg.from.id !== ADMIN_ID) {
+    return bot.sendMessage(msg.chat.id, '❌ You are not authorized to use this command.');
+  }
+
+  const number = match[1];
+  const exists = await Scam.findOne({ number });
+  if (exists) {
+    return bot.sendMessage(msg.chat.id, '⚠️ This number is already marked as a scammer.');
+  }
+
+  const newScammer = new Scam({ number });
+  await newScammer.save();
+
+  bot.sendMessage(msg.chat.id, `✅ Added ${number} to scammer list.`);
+});
+
+// ==== ADD PROOF (ADMIN ONLY) ====
+bot.onText(/\/addproof (.+) (.+)/, async (msg, match) => {
+  if (msg.from.id !== ADMIN_ID) {
+    return bot.sendMessage(msg.chat.id, '❌ You are not authorized to use this command.');
+  }
+
+  const number = match[1];
+  const proof = match[2];
+
+  const scammer = await Scam.findOne({ number });
+  if (!scammer) {
+    return bot.sendMessage(msg.chat.id, '⚠️ This number is not in scammer list. Add it first.');
+  }
+
+  scammer.proof = proof;
+  await scammer.save();
+
+  bot.sendMessage(msg.chat.id, `✅ Added proof for ${number}.`);
 });
