@@ -1,93 +1,73 @@
 import TelegramBot from "node-telegram-bot-api";
-import fs from "fs";
 
-// === CONFIG ===
-const BOT_TOKEN = process.env.BOT_TOKEN; // set in Render environment
-const ADMIN_ID = process.env.ADMIN_ID; // your Telegram user ID
+// ==================== CONFIG ====================
+const ADMIN_ID = 123456789; // <- Replace with YOUR Telegram user ID
+const token = process.env.BOT_TOKEN; // Set BOT_TOKEN in Render's Environment Variables
+// ================================================
 
-// Load scam data
-let scamData = [];
-const loadData = () => {
-  try {
-    scamData = JSON.parse(fs.readFileSync("scamData.json", "utf-8"));
-  } catch (err) {
-    scamData = [];
-  }
-};
-const saveData = () => {
-  fs.writeFileSync("scamData.json", JSON.stringify(scamData, null, 2));
-};
+// In-memory scammer database
+let scammers = {};
 
-loadData();
+// Create bot
+const bot = new TelegramBot(token, { polling: true });
 
-// Start bot
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
-
-// /start command
+// Start command
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(
-    msg.chat.id,
-    `👋 Welcome to Scam Checker Bot!\n\nSend a phone number with country code (e.g., +919876543210) to check if it's reported as a scam.`
-  );
+  const chatId = msg.chat.id;
+  const message = `👋 Welcome to Scam Checker Bot!
+
+📌 *How to use:*
+1️⃣ Send a phone number with country code (e.g., +911234567890).
+2️⃣ The bot will check if it's marked as a scammer.
+
+🛡 *Admin Commands:*
+/addscammer +<number> <proof>
+/removescammer +<number>
+
+⚠️ Only the admin can add or remove scammers.`;
+
+  bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
 });
 
-// Admin add scammer
-bot.onText(/\/addscammer (.+)/, (msg, match) => {
-  if (msg.from.id.toString() !== ADMIN_ID) {
-    return bot.sendMessage(msg.chat.id, "❌ You are not authorized to add scammers.");
-  }
-
-  const input = match[1].trim();
-  const firstSpace = input.indexOf(" ");
-  if (firstSpace === -1) {
-    return bot.sendMessage(msg.chat.id, "⚠️ Usage: /addscammer <number> <details>");
-  }
-
-  const number = input.slice(0, firstSpace);
-  const details = input.slice(firstSpace + 1);
-
-  if (scamData.find((e) => e.number === number)) {
-    return bot.sendMessage(msg.chat.id, "⚠️ This number is already in the database.");
-  }
-
-  scamData.push({ number, status: "scammer", details });
-  saveData();
-
-  bot.sendMessage(msg.chat.id, `✅ Scammer number ${number} added successfully!`);
-});
-
-// Handle number check
+// User sends a number to check
 bot.on("message", (msg) => {
+  const chatId = msg.chat.id;
   const text = msg.text.trim();
 
-  // Ignore commands
+  // Skip commands
   if (text.startsWith("/")) return;
 
-  const found = scamData.find((entry) => entry.number === text);
-
-  if (found) {
-    bot.sendMessage(msg.chat.id, `⚠️ *Scammer detected!*`, {
-      parse_mode: "Markdown",
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "📄 Proof", callback_data: `proof_${found.number}` }]
-        ]
-      }
-    });
+  if (scammers[text]) {
+    bot.sendMessage(chatId, `🚨 *SCAMMER ALERT!* 🚨\n📞 ${text}\n📄 Proof: ${scammers[text]}`, { parse_mode: "Markdown" });
   } else {
-    bot.sendMessage(msg.chat.id, `✅ No scam details available for this number.`);
+    bot.sendMessage(chatId, `✅ No scam details available for: ${text}`);
   }
 });
 
-// Proof button
-bot.on("callback_query", (query) => {
-  const chatId = query.message.chat.id;
-  const number = query.data.split("_")[1];
-  const found = scamData.find((entry) => entry.number === number);
+// Add scammer (Admin only)
+bot.onText(/\/addscammer (.+) (.+)/, (msg, match) => {
+  if (msg.from.id !== ADMIN_ID) {
+    return bot.sendMessage(msg.chat.id, "❌ You are not authorized to use this command.");
+  }
 
-  if (found) {
-    bot.sendMessage(chatId, `📄 *Proof:* ${found.details}`, { parse_mode: "Markdown" });
+  const number = match[1];
+  const proof = match[2];
+  scammers[number] = proof;
+
+  bot.sendMessage(msg.chat.id, `✅ Added scammer: ${number}\n📄 Proof: ${proof}`);
+});
+
+// Remove scammer (Admin only)
+bot.onText(/\/removescammer (.+)/, (msg, match) => {
+  if (msg.from.id !== ADMIN_ID) {
+    return bot.sendMessage(msg.chat.id, "❌ You are not authorized to use this command.");
+  }
+
+  const number = match[1];
+  if (scammers[number]) {
+    delete scammers[number];
+    bot.sendMessage(msg.chat.id, `✅ Removed scammer: ${number}`);
   } else {
-    bot.sendMessage(chatId, "No details found.");
+    bot.sendMessage(msg.chat.id, `ℹ️ No record found for: ${number}`);
   }
 });
