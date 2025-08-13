@@ -1,75 +1,70 @@
-// index.js
-const TelegramBot = require('node-telegram-bot-api');
-const mongoose = require('mongoose');
+import TelegramBot from "node-telegram-bot-api";
+import express from "express";
+import mongoose from "mongoose";
+import dotenv from "dotenv";
 
-// ====== CONFIG ======
-const BOT_TOKEN = process.env.BOT_TOKEN || "YOUR_BOT_TOKEN";
-const ADMIN_ID = 1697591760; // Your Telegram ID
-const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://db_Xpreloads:db_Narbu26042002@cluster0.1nmv5td.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
+dotenv.config();
 
-// ====== DB MODEL ======
+// ENV variables
+const token = process.env.BOT_TOKEN;
+const mongoURI = process.env.MONGO_URI;
+const adminId = process.env.ADMIN_ID;
+
+// MongoDB Schema
 const scamSchema = new mongoose.Schema({
-    username: String,
-    scam: Boolean,
-    date: { type: Date, default: Date.now }
+  name: String,
+  proof: String,
 });
-const Scam = mongoose.model('Scam', scamSchema);
+const Scam = mongoose.model("Scam", scamSchema);
 
-// ====== CONNECT DB ======
-mongoose.connect(MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true
-}).then(() => console.log("✅ MongoDB Connected"))
-.catch(err => console.error("❌ MongoDB Error:", err));
+// Express server
+const app = express();
+app.use(express.json());
 
-// ====== BOT ======
-const bot = new TelegramBot(BOT_TOKEN, { polling: true });
+// Connect to MongoDB
+mongoose.connect(mongoURI)
+  .then(() => console.log("✅ MongoDB connected"))
+  .catch(err => console.error("❌ MongoDB Error:", err));
 
-bot.on('message', async (msg) => {
-    const chatId = msg.chat.id;
-    const text = msg.text?.trim();
+// Create bot (no polling, webhook mode)
+const bot = new TelegramBot(token, { webHook: true });
+bot.setWebHook(`${process.env.RENDER_EXTERNAL_URL}/bot${token}`);
 
-    if (!text) return;
+// Commands
+bot.onText(/\/add (.+)/, async (msg, match) => {
+  if (msg.from.id.toString() !== adminId) {
+    return bot.sendMessage(msg.chat.id, "❌ You are not authorized.");
+  }
 
-    // Admin check
-    if (chatId === ADMIN_ID && text.startsWith('/addscam')) {
-        const parts = text.split(' ');
-        if (parts.length < 2) return bot.sendMessage(chatId, "⚠ Usage: /addscam username");
+  const [name, proof] = match[1].split(";");
+  if (!name || !proof) {
+    return bot.sendMessage(msg.chat.id, "Usage: /add Name;ProofURL");
+  }
 
-        const username = parts[1].replace('@', '');
-        await Scam.create({ username, scam: true });
-        return bot.sendMessage(chatId, `✅ @${username} added to scam list.`);
-    }
-
-    if (chatId === ADMIN_ID && text.startsWith('/removescam')) {
-        const parts = text.split(' ');
-        if (parts.length < 2) return bot.sendMessage(chatId, "⚠ Usage: /removescam username");
-
-        const username = parts[1].replace('@', '');
-        await Scam.deleteOne({ username });
-        return bot.sendMessage(chatId, `✅ @${username} removed from scam list.`);
-    }
-
-    // User check command
-    if (text.startsWith('/check')) {
-        const parts = text.split(' ');
-        if (parts.length < 2) return bot.sendMessage(chatId, "⚠ Usage: /check username");
-
-        const username = parts[1].replace('@', '');
-        const scamData = await Scam.findOne({ username });
-
-        if (scamData) {
-            return bot.sendMessage(chatId, `🚨 @${username} is marked as SCAM!`);
-        } else {
-            return bot.sendMessage(chatId, `✅ @${username} is NOT in the scam list.`);
-        }
-    }
-
-    // Only admin can use add/remove
-    if (text.startsWith('/addscam') || text.startsWith('/removescam')) {
-        return bot.sendMessage(chatId, "❌ You are not authorized to use this command.");
-    }
+  await Scam.create({ name, proof });
+  bot.sendMessage(msg.chat.id, `✅ Scammer added:\nName: ${name}\nProof: ${proof}`);
 });
 
-// ====== STARTUP ======
-console.log("🤖 Scam Checker Bot is running...");
+bot.onText(/\/list/, async (msg) => {
+  const scammers = await Scam.find();
+  if (!scammers.length) return bot.sendMessage(msg.chat.id, "📂 No scammers in database.");
+  
+  let text = "📜 Scam List:\n\n";
+  scammers.forEach(s => {
+    text += `• ${s.name} - ${s.proof}\n`;
+  });
+  
+  bot.sendMessage(msg.chat.id, text);
+});
+
+// Webhook route
+app.post(`/bot${token}`, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
+
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Bot running on port ${PORT}`);
+});
